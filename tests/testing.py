@@ -1,4 +1,3 @@
-import pytest
 from library_service import (
     add_book_to_catalog,
     borrow_book_by_patron,
@@ -109,18 +108,24 @@ def test_borrow_book_unavailable():
     borrow_book_by_patron("654321", book_id)  # First borrow
     success, message = borrow_book_by_patron("123456", book_id)  # Attempt second borrow
     assert success is False
-    assert "no available copies" in message.lower()
+    assert "not available" in message.lower()
 
 def test_borrow_book_exceeds_limit():
     """Test borrowing a book when patron exceeds borrowing limit."""
-    add_book_to_catalog("Limit Test Book", "Author", "2222222222222", 1)
-    books = get_all_books()
-    book_id = books[-1]['id']
-
     for i in range(5):
-        borrow_book_by_patron(f"65432{i}", book_id)  # Borrow 5 books
+        add_book_to_catalog(f"Limit Test Book {i}", "Author", f"222222222222{i}", 1)
+    
+    books = get_all_books()
+    book_ids = [book['id'] for book in books[-5:]]  # Get last 5 books
 
-    success, message = borrow_book_by_patron("654321", book_id)  # Attempt 6th borrow
+    for book_id in book_ids:
+        borrow_book_by_patron("654321", book_id)
+
+    add_book_to_catalog("Limit Test Book 6", "Author", "2222222222226", 1)
+    books = get_all_books()
+    new_book_id = books[-1]['id']
+    
+    success, message = borrow_book_by_patron("654321", new_book_id)  # Attempt 6th borrow
     assert success is False
     assert "borrowing limit" in message.lower()
 
@@ -262,8 +267,8 @@ def test_patron_status_with_borrowed_books():
     borrow_book_by_patron("654321", book_id)
     status = get_patron_status_report("654321")
 
-    assert len(status['borrowed_books']) == 1
-    assert status['borrowed_books'][0]['title'] == "Borrowed Book"
+    assert len(status['currently_borrowed']) == 1
+    assert status['currently_borrowed'][0]['title'] == "Borrowed Book"
 
 def test_patron_status_with_late_fees():
     """Test generating a patron status report with late fees."""
@@ -280,7 +285,7 @@ def test_patron_status_with_no_borrowed_books():
     """Test generating a patron status report with no borrowed books."""
     status = get_patron_status_report("654321")
 
-    assert len(status['borrowed_books']) == 0
+    assert len(status['currently_borrowed']) == 0
     assert status['total_late_fees'] == 0
 
 def test_patron_status_with_borrowing_history():
