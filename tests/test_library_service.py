@@ -1,3 +1,11 @@
+import os
+import sys
+from datetime import datetime, timedelta
+
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
 from services.library_service import (
     add_book_to_catalog,
     borrow_book_by_patron,
@@ -9,6 +17,8 @@ from services.library_service import (
 from database import (
     get_all_books,
 )
+
+import services.library_service as ls
 
 
 # R1 testcases:
@@ -131,7 +141,7 @@ def test_borrow_book_invalid_patron():
     assert test_book is not None
     book_id = test_book["id"]
 
-    success, message = borrow_book_by_patron("12345", book_id)  
+    success, message = borrow_book_by_patron("12345", book_id)
     assert success is False
     assert "invalid patron" in message.lower()
 
@@ -140,7 +150,7 @@ def test_borrow_book_unavailable():
     """Test borrowing a book that is unavailable."""
     books_before = get_all_books()
     suffix = len(books_before) + 1
-    isbn = f"800000{suffix:07d}"  
+    isbn = f"800000{suffix:07d}"
 
     add_book_to_catalog("Unavailable Book", "Author", isbn, 1)
     books = get_all_books()
@@ -170,9 +180,8 @@ def test_borrow_book_exceeds_limit():
 
     book_ids = []
 
-   
     for i in range(7):
-        isbn = f"10000090001{i:02d}"  
+        isbn = f"10000090001{i:02d}"
         title = f"Limit Test Book {i}"
         add_book_to_catalog(title, "Author", isbn, 1)
         books = get_all_books()
@@ -180,7 +189,6 @@ def test_borrow_book_exceeds_limit():
         assert test_book is not None
         book_ids.append(test_book["id"])
 
-    
     for book_id in book_ids[:6]:
         success, _ = borrow_book_by_patron(test_patron, book_id)
         assert success is True
@@ -232,7 +240,7 @@ def test_return_book_invalid_patron():
     book_id = test_book["id"]
 
     borrow_book_by_patron("888888", book_id)
-    success, message = return_book_by_patron("12345", book_id)  
+    success, message = return_book_by_patron("12345", book_id)
     assert success is False
     assert "invalid patron" in message.lower()
 
@@ -298,6 +306,7 @@ def test_calculate_late_fee_one_day():
     assert fee_info["days_overdue"] == 0
 
 
+
 def test_calculate_late_fee_latest():
     """Test calculating late fee for a book - verifies function returns correct structure."""
     add_book_to_catalog("Max Fee Book", "Author", "1000000000022", 1)
@@ -316,7 +325,7 @@ def test_calculate_late_fee_latest():
     assert "fee_amount" in fee_info
     assert "days_overdue" in fee_info
     assert "status" in fee_info
-    assert fee_info["fee_amount"] == 0.00  
+    assert fee_info["fee_amount"] == 0.00
 
 
 def test_calculate_late_fee_no_borrow_record():
@@ -448,3 +457,138 @@ def test_patron_status_with_borrowing_history():
     history_titles = [h["title"] for h in status["borrowing_history"]]
     assert "History Book" in history_titles
 
+
+#extra tests
+
+def test_add_book_title_too_long():
+    """R1: title > 200 chars should be rejected."""
+    long_title = "A" * 201
+    success, message = add_book_to_catalog(
+        long_title, "Some Author", "2000000000001", 1
+    )
+    assert success is False
+    assert "title must be less than 200" in message.lower()
+
+
+def test_add_book_author_blank():
+    """R1: blank author should be rejected."""
+    success, message = add_book_to_catalog(
+        "Some Book", "   ", "2000000000002", 1
+    )
+    assert success is False
+    assert "author is required" in message.lower()
+
+
+def test_add_book_author_too_long():
+    """R1: author > 100 chars should be rejected."""
+    long_author = "B" * 101
+    success, message = add_book_to_catalog("Some Book", long_author, "2000000000003", 1 )
+    assert success is False
+    assert "author must be less than 100" in message.lower()
+
+
+def test_add_book_total_copies_not_int():
+    """R1: non-int total_copies should be rejected."""
+    success, message = add_book_to_catalog( "Some Book", "Author", "2000000000004", "5"  )
+    assert success is False
+    assert "total copies must be a positive integer" in message.lower()
+
+
+def test_add_book_database_insert_failure(monkeypatch):
+    """
+    R1: cover the 'database error' branch when insert_book returns False.
+    We monkeypatch DB helpers so we don't touch the real database here.
+    """
+    monkeypatch.setattr(ls, "get_book_by_isbn", lambda isbn: None)
+
+    def fake_insert_book(*args, **kwargs):
+        return False
+
+    monkeypatch.setattr(ls, "insert_book", fake_insert_book)
+
+    success, message = add_book_to_catalog(
+        "DB Fail Book", "Author", "2000000000005", 1
+    )
+    assert success is False
+    assert "database error" in message.lower()
+
+
+def test_borrow_book_book_not_found(monkeypatch):
+    """
+    R3: cover branch where get_book_by_id returns None.
+    """
+    monkeypatch.setattr(ls, "get_book_by_id", lambda book_id: None)
+
+    success, message = borrow_book_by_patron("555555", 999999)
+    assert success is False
+    assert "book not found" in message.lower()
+
+
+def test_search_books_invalid_search_type():
+    """
+    R6: search_books_in_catalog should return [] for an invalid search_type.
+    """
+    add_book_to_catalog("Whatever", "Author", "2000000000006", 1)
+    results = search_books_in_catalog("Whatever", "not_a_real_type")
+    assert results == []
+
+
+def test_patron_status_invalid_id():
+    """
+    R7: get_patron_status_report branch for invalid patron ID.
+    """
+    status = get_patron_status_report("12a456")
+    assert status["currently_borrowed"] == []
+    assert status["total_late_fees"] == 0.0
+    assert "error" in status
+
+
+def test_return_book_with_late_fee_branch(monkeypatch):
+    """
+    R4 + R5: hit the 'late fee > 0' path in return_book_by_patron
+    without depending on real DB dates.
+    """
+    monkeypatch.setattr(ls, "get_book_by_id",lambda book_id: {"id": book_id, "title": "Late Book"})
+
+    borrowed_record = {"book_id": 1, "due_date": datetime.now() - timedelta(days=3)}
+    monkeypatch.setattr(ls, "get_patron_borrowed_books",lambda patron_id: [borrowed_record])
+
+    monkeypatch.setattr(ls, "update_borrow_record_return_date",lambda patron_id, book_id, return_date: True)
+                        
+    monkeypatch.setattr(ls, "update_book_availability",lambda book_id, delta: True)
+
+    monkeypatch.setattr(
+        ls,
+        "calculate_late_fee_for_book",
+        lambda patron_id, book_id: {
+            "fee_amount": 5.0,
+            "days_overdue": 3,
+            "status": "Overdue",
+        },
+    )
+
+    success, message = return_book_by_patron("123456", 1)
+    assert success is True
+    assert "late fee" in message.lower()
+    assert "$5.00" in message
+
+def test_calculate_late_fee_invalid_patron_id_branch():
+    """
+    Directly hit the 'Invalid patron ID' branch in calculate_late_fee_for_book.
+    """
+    info = calculate_late_fee_for_book("12a456", 1)  
+    assert info["fee_amount"] == 0.0
+    assert info["days_overdue"] == 0
+    assert info["status"] == "Invalid patron ID"
+
+
+def test_calculate_late_fee_book_not_found_branch(monkeypatch):
+    """
+    Hit the 'Book not found' branch by stubbing get_book_by_id to return None.
+    """
+    monkeypatch.setattr(ls, "get_book_by_id", lambda book_id: None)
+
+    info = calculate_late_fee_for_book("123456", 9999)  
+    assert info["fee_amount"] == 0.0
+    assert info["days_overdue"] == 0
+    assert info["status"] == "Book not found"
